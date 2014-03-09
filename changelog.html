@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset='utf-8'>
+    <meta http-equiv="X-UA-Compatible" content="chrome=1">
+
+    <link rel="stylesheet" type="text/css" href="stylesheets/stylesheet.css" media="screen" />
+    <link rel="stylesheet" type="text/css" href="stylesheets/pygment_trac.css" media="screen" />
+    <link rel="stylesheet" type="text/css" href="stylesheets/print.css" media="print" />
+
+    <title>RegPack benchmarks</title>
+  </head>
+
+  <body>
+
+    <header>
+      <div class="container">
+        <h1>siorki.github.io</h1>
+        <h2>RegPack - change log</h2>
+
+        <section id="downloads" class="topright">
+          <a href="https://github.com/Siorki/RegPack" class="btn btn-github"><span class="icon"></span>View on GitHub</a>
+        </section>
+      </div>
+    </header>
+
+    <div class="container">
+      <section id="main_content">
+	    <h3>v3.0.1 - March 2014</h3>
+		<p>Fixed bugs</p>
+		<ul>
+		<li>#2 : support for Unicode characters in regular expression</li>
+		<li>#4 : original size showed without added escapes</li>
+		<li>#5 : correct size in bytes after preprocessing stage</li>
+		</ul>
+		<h3>v3.0 - February 2014</h3>
+		<p>Added preprocessing stage at the beginning of compression workflow.</p>
+		<ul>
+		<li>method hashing/renaming for 2D context, WebGL context and AudioContext</li>
+		<li>variable renaming to free tokens for the crusher</li>
+		</ul>
+		<p>Fixed bugs :</p>
+		<ul>
+		<li>Incorrect CR/LF handling for code using characters below 10</li>
+		<li>Character 127 ignored in negated char class regexp</li>
+		</ul>
+		<h3>v2.0 - April 2013</h3>
+        <p>Use of regular expressions with negated char class (listing characters not to match on).</p>
+		<hr>
+		<a href=regPack.html>Use RegPack now</a> - <a href=benchmarks.html>Benchmarks</a> - Change log - How it works (coming soon)
+      </section>
+    </div>
+
+    
+  </body>
+</html>
