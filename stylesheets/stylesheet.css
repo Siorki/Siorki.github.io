@@ -170,8 +170,8 @@ table {
 
 th {
   text-align: center;
-  border-bottom: 1px dashed #b5e853;
   padding: 5px 5px;
+  font-size: 14px;
 }
 
 td {
@@ -182,6 +182,10 @@ td {
 
 td.name, th.name {
   text-align: left;
+}
+
+th.split {
+	border-bottom: 1px dashed #b5e853;
 }
 
 hr {

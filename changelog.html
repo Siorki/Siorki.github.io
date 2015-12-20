@@ -26,6 +26,25 @@
 
     <div class="container">
       <section id="main_content">
+		<h3>v4.0 - December 2015</h3>
+		<p>New features :</p>
+		<ul>
+		<li>#16 : Add an option for base64 encoded output</li>
+		<li>#19 : Use setInterval() to evaluate the unpacked code</li>
+		<li>#21 : Hash not only canvas functions, but also canvas properties</li>
+		<li>#23 : Extra hashing functions</li>
+		<li>#25 : Visualize the compressed patterns inside the source code</li>
+		</ul>
+		<p>Fixed bugs</p>
+		<li>#10 : Use varsNotReassigned in renameObjectMethods </li>
+		<li>#17 : Hashing code confuses first and second 2D context</li>
+		<li>#20 : Code packed in FF fails in Chrome because of deprecated context methods </li>
+		<li>#27 : Do not let variable renaming interfere with the use of the variable _</li>
+		<li>#28 : Unable to create 2D/GL/Audio context under Node.js</li>
+		<li>#29 : Variable renaming gives different results under FF / Chrome / Node.js</li>
+		<li>#30 : support for '!' character in WebGL context declaration</li>
+		<li>#31 : Single - character misinterpreted as range in RegExp</li>
+		</ul>
 	    <h3>v3.0.2 - February 2015</h3>
 		<p>Fixed bugs</p>
 		<ul>
