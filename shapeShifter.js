@@ -1,7 +1,8 @@
 // Node.js init
 if (typeof require !== 'undefined') {
-	PackerData = require("./packerData");
-	ContextDescriptor = require("./contextDescriptor_node");
+	var PackerData = require("./packerData");
+	var StringHelper = require("./stringHelper");
+ 	var ContextDescriptor = require("./contextDescriptor_node");
 }
 
 /**
@@ -16,6 +17,7 @@ if (typeof require !== 'undefined') {
 function ShapeShifter() {
 	
 	this.contextDescriptor = new ContextDescriptor();
+	this.stringHelper = StringHelper.getInstance();
 	
 	// hashing functions for method and property renaming
 	this.hashFunctions = [
@@ -30,6 +32,7 @@ function ShapeShifter() {
 		["w[0]+[w[x]]+[w[y]]", 3, 20, 3, 20, function(w,x,y) { return w[0]+[w[x]]+[w[y]]; } ],
 		["w.substr(x,3)", 0, 2, 0, 0, function(w,x,y) { return w.substr(x,3); } ]
 	];
+	
 }
 
 
@@ -55,33 +58,46 @@ ShapeShifter.prototype = {
 	 *       -  varsNotReassigned : string or array listing all protected variables (whose name will not be modified)
 	 *       -  wrapInSetInterval : true to wrap the unpacked code in a setInterval() call instead of eval()
 	 *       -  timeVariableName : if "setInterval" option is set, the variable to use for time (zero on first loop, nonzero after)
+	 *       -  useES6 : true to add ES6 constructs to the code, false otherwise
 	 */
 	preprocess : function(input, options) {
 	
 		// Transform the list of protected variables into a boolean array[128] (true = protected).
 		// Same information but easier to access by algorithms.
-		var varsNotReassignedRaw = options.varsNotReassigned;
-		options.varsNotReassigned = [];
-		for (var i=0; i<128; ++i) {	// replace by Array.fill() once ES6 is supported
-			options.varsNotReassigned.push(false);
-		}
-		for (var i=0; i<varsNotReassignedRaw.length; ++i) {
-			var ascii = varsNotReassignedRaw[i].charCodeAt(0);
-			if (ascii>=0 && ascii<128 && this.isCharAllowedInVariable(ascii)) {
-				options.varsNotReassigned[ascii] = true;
+		// Only perform it once on an option set : unit tests reuse the same options for several calls
+		if (!options.varsNotReassignedRaw) {
+			options.varsNotReassignedRaw = options.varsNotReassigned;
+			options.varsNotReassigned = [];
+			for (var i=0; i<128; ++i) {	// replace by Array.fill() once ES6 is supported
+				options.varsNotReassigned.push(false);
+			}
+			for (var i=0; i<options.varsNotReassignedRaw.length; ++i) {
+				var ascii = options.varsNotReassignedRaw[i].charCodeAt(0);
+				if (ascii>=0 && ascii<128 && this.isCharAllowedInVariable(ascii)) {
+					options.varsNotReassigned[ascii] = true;
+				}
 			}
 		}
 		
 		var inputData = new PackerData ('', input);
 		if (options.withMath) {
-			inputData.contents = input.replace(/Math\./g, '');
-			inputData.environment = 'with(Math)';
+			// call module : Define environment
+			this.defineEnvironment(inputData);
 		}
 		
 		var inputList = [ inputData ];
 		if (options.wrapInSetInterval) {
-			// method stores the refactored code, log and setup change in inputData
+			// call module : wrap with setInterval
 			this.refactorToSetInterval(inputData, options);
+		} else {
+			// map the bytes of the default interpreter call "eval(_)" to the entire code
+			var envMapping = [ { inLength : inputData.contents.length, outLength : inputData.contents.length, complete : false},
+				   { chapter  : 4, 
+					 rangeIn  : [0, inputData.contents.length],
+					 rangeOut : [0, inputData.interpreterCall.length]
+				   }  ];
+			inputData.thermalMapping.push(envMapping);
+
 		}
 		
 		
@@ -90,16 +106,9 @@ ShapeShifter.prototype = {
 		//  - method and property
 		// then store the results in the inputList
 		if (options.hash2DContext) {
-			for (var count=inputList.length, i=0; i<count; ++i)
-			{
-				var result = this.preprocess2DContext(inputList[i], options);
-				if (result) {
-					var methodHashedData = PackerData.clone(inputList[i], " 2D(methods)", result[0][1], result[0][2]);
-					inputList.push(methodHashedData);
-					
-					var propertyHashedData = PackerData.clone(inputList[i], " 2D(properties)", result[1][1], result[1][2]);
-					inputList.push(propertyHashedData);
-				}
+			for (var count=inputList.length, i=0; i<count; ++i) {
+				var newBranches = this.preprocess2DContext(inputList[i], options);
+				inputList.push(...newBranches); // ES6 syntax : concatenate arrays
 			}
 		}
 		
@@ -108,45 +117,46 @@ ShapeShifter.prototype = {
 		//   - as above, plus replace the definitions of constants with their values (magic numbers)
 		//   - hash and replace method and property names
 		if (options.hashWebGLContext) {
-			for (var count=inputList.length, i=0; i<count; ++i)
-			{
-				var result = this.preprocessWebGLContext(inputList[i], options);
-				if (result) {
-					var methodHashedData = PackerData.clone(inputList[i], " WebGL(methods)", result[0][1], result[0][2]);
-					inputList.push(methodHashedData);
-					
-					var constantHashedData = PackerData.clone(inputList[i], " WebGL(methods+constants)", result[1][1], result[1][2]);
-					inputList.push(constantHashedData);
-
-					var propertyHashedData = PackerData.clone(inputList[i], " WebGL(properties)", result[2][1], result[2][2]);
-					inputList.push(propertyHashedData);
-				}
+			for (var count=inputList.length, i=0; i<count; ++i) {
+				var newBranches = this.preprocessWebGLContext(inputList[i], options);
+				inputList.push(...newBranches); // ES6 syntax : concatenate arrays
 			}
 		}
 
 		// for AudioContexts, method hashing only
 		if (options.hashAudioContext) {
-			for (var count=inputList.length, i=0; i<count; ++i) 
-	 		{
-				var result = this.preprocessAudioContext(inputList[i].contents, options.varsNotReassigned, inputList[i].log);
-				if (result) {
-					var audioHashedData = PackerData.clone(inputList[i], " Audio", result[1], result[2]);
-					inputList.push(audioHashedData);
-				}	
+			for (var count=inputList.length, i=0; i<count; ++i) {
+				var newBranches = this.preprocessAudioContext(inputList[i], options.varsNotReassigned);
+				inputList.push(...newBranches); // ES6 syntax : concatenate arrays
 			}
 		}
 		inputList[0].name="unhashed";
-		
-		if (options.reassignVars)
-		{
-			for (var i=0; i<inputList.length; ++i) {
-				// method stores the refactored code, log and setup change in inputList[i]
+
+		for (var i=0; i<inputList.length; ++i) {
+			this.identifyStrings(inputList[i], options);
+			// call module : quote strings
+			this.quoteStrings(inputList[i], options);
+			if (options.reassignVars) {
+				// call module : reassign variables
 				this.reassignVariableNames(inputList[i], options);
 			}
 		}
 		return inputList;
 	},
 
+	/**
+	 * Modifies the environment execution of the unpacked code,
+	 * wrapping it into with(Math).
+	 * Removes all references to Math. in the input code
+	 * @param inputData (in/out) PackerData structure containing the code to refactor and setup 
+	 */
+	defineEnvironment : function(inputData) {
+		inputData.environment = 'with(Math)';
+		var envMapping = { chapter : 2, rangeOut : [0, inputData.environment.length] };
+		inputData.contents = this.stringHelper.matchAndReplaceAll(inputData.contents, false, 'Math.', '', '', '', envMapping, inputData.thermalMapping);
+	},
+	
+	
 	/**
 	 * Rewrites the input code so that it can entirely be executed inside
 	 * a setInterval() loop without prior initialization.
@@ -178,7 +188,20 @@ ShapeShifter.prototype = {
 		var varsNotReassigned = options.varsNotReassigned;
 		var details = "----------- Refactoring to run with setInterval() ---------------\n";
 		var timeVariableProvided = true;
+
+		// implementation for #44 : match arrow function syntax (new in ES6)		
+		// regular expression matches pre-ES5 syntax : function(params){...}
 		var loopMatch = input.match(/setInterval\(function\(([\w\d.=,]*)\){/);
+		var functionDeclaration = "function(";
+		if (!loopMatch) { // regular expression matches ES6 syntax : (params)=>{...}
+			loopMatch = input.match(/setInterval\(\(([\w\d.=,]*)\)=>{/);
+			functionDeclaration = ")=>";
+		}
+		if (!loopMatch) { // regular expression matches ES6 syntax : one_param=>{...}
+			loopMatch = input.match(/setInterval\(([\w\d.]*)(=>){/);
+			functionDeclaration = "=>";
+		}
+
 		if (loopMatch) {
 			var initCode = input.substr(0, loopMatch.index);
 			// remove any trailing comma or semicolon			
@@ -188,22 +211,21 @@ ShapeShifter.prototype = {
 			
 			details += "First "+loopMatch.index+" bytes moved to conditional sequence.\n";
 			
-			// parameters of the function passed to setInterval() :
-			// remove declarations without assignment
+			// parameters of the function passed to setInterval() : extract default values
+			// The regex matches a variable declaration, without value assignment (no "="),
+			// at the beginning, end, or between two commas
 			var paramsCode = loopMatch[1];
-			var paramsExp = /[\w\d$_]*,|$/;
+			var paramsExp = /(^|,)[A-Za-z$_][\w$_]*(,|$)/;
 		
 			var paramsMatch = paramsExp.exec(paramsCode);
-			while (paramsMatch[0] != "") {
-				paramsCode = paramsCode.substr(0, paramsMatch.index)+paramsCode.substr(paramsMatch.index+paramsMatch[0].length);
+			while (paramsMatch && paramsMatch[0] != "") {
+				// if the variable is between two commas, keep one : ",k," becomes ","
+				var keptCommas = (paramsMatch[1]+paramsMatch[2]).length>1 ? "," : "";
+				paramsCode = paramsCode.substr(0, paramsMatch.index)+keptCommas+paramsCode.substr(paramsMatch.index+paramsMatch[0].length);
 				paramsMatch = paramsExp.exec(paramsCode);
 			}
-			// remove the last variable (without the comma)
-			paramsMatch = paramsCode.match(/^[\w\d$_]*$/);
-			if (paramsMatch[0] == paramsCode) {
-				paramsCode = "";
-			}
-			// if not empty, add a semicolon
+
+			// end by a semicolon if there are any initializations that will be added to the main loop code
 			paramsCode += (paramsCode != "" ? ";" : "");
 			
 			if (timeVariableName=="") {
@@ -214,11 +236,13 @@ ShapeShifter.prototype = {
 			
 			// Strip the declaration of the time variable from the init code,
 			// as it will be defined in the unpacking routine instead.
+			var timeDefinitionBegin = initCode.length;
+			var timeDefinitionEnd = timeDefinitionBegin;
 			var timeDefinitionExp = new RegExp("(^|[^\\w$])"+timeVariableName+"=","g");
 			var timeDefinitionMatch=timeDefinitionExp.exec(initCode);
 			if (timeDefinitionMatch) {
-				var timeDefinitionBegin = timeDefinitionMatch.index+timeDefinitionMatch[1].length;
-				var timeDefinitionEnd = timeDefinitionBegin+2;
+				timeDefinitionBegin = timeDefinitionMatch.index+timeDefinitionMatch[1].length;
+				timeDefinitionEnd = timeDefinitionBegin+2;
 				
 				// Check if we can strip more than "t=" depending on what comes before and after :
 				//  - Brackets means no : the declaration is used as an argument in a function
@@ -257,6 +281,7 @@ ShapeShifter.prototype = {
 					switch (input.charCodeAt(index)) {
 						case 34 : // "
 						case 39 : // '
+						case 96 : // `
 							inString = input.charCodeAt(index);
 							break;
 						case 123 : // {
@@ -285,11 +310,11 @@ ShapeShifter.prototype = {
 				//   - if(!t){/*init code*/} if the variable is used (and set) afterwards
 				//   - if(!t++){/*init code*/} if it is created only for the test
 				var wrapperCode = "if(!"+timeVariableName+(timeVariableProvided?"":"++")+"){";
+				var mainLoopCode = input.substr(loopMatch.index+loopMatch[0].length, index-loopMatch.index-loopMatch[0].length-1);
 				// Redefine the "offset zero" of our transformed code,
 				// used to hash methods/properties of contexts provided by shim
 				inputData.initialDeclarationOffset = wrapperCode.length;
-				initCode=wrapperCode+paramsCode+initCode+finalCode+"}";
-				output = initCode+input.substr(loopMatch.index+loopMatch[0].length, index-loopMatch.index-loopMatch[0].length-1);
+				output = wrapperCode + initCode + finalCode + "}" + paramsCode + mainLoopCode;
 				
 				inputData.interpreterCall = 'setInterval(_,'+delayMatch[1]+')';
 				inputData.wrappedInit = timeVariableName+'=0';
@@ -302,7 +327,53 @@ ShapeShifter.prototype = {
 					inputData.wrappedInit = "";
 					details += timeVariableName+" initialized as parameter to setInterval, kept as is.\n";
 				}
-			 } else {	// delayMatch === false
+				
+				var functionDeclarationOffset = loopMatch.index+loopMatch[0].indexOf(functionDeclaration);
+				// Record the change in the thermal transform
+				var transform = [ { inLength : input.length, outLength : output.length, complete : true } ];
+				// "if(!t){" : mapped to "function("
+				transform.push ( { chapter : 0, rangeIn : [functionDeclarationOffset, functionDeclaration.length], rangeOut : [0, wrapperCode.length] });
+				var rangeOutBegin = wrapperCode.length;
+				// code before the main loop, before the time variable declaration, mapped to itself
+				transform.push ( { chapter : 0, rangeIn : [0, timeDefinitionBegin], rangeOut : [rangeOutBegin, timeDefinitionBegin] });
+				rangeOutBegin += timeDefinitionBegin;
+				if (timeDefinitionMatch) {
+					// code before the main loop, after the time variable declaration, mapped to itself
+					// may omit the final "," or ";", if any, that is eliminated = mapped to nothing
+					var initSecondHalfLength = initCode.length-timeDefinitionBegin;
+					transform.push ( { chapter : 0, rangeIn : [timeDefinitionEnd, initSecondHalfLength], rangeOut : [rangeOutBegin, initSecondHalfLength] });
+					rangeOutBegin += initSecondHalfLength;
+				}
+				if (finalCode.length) {
+					// code after the main loop, mapped to itself
+					transform.push ( { chapter : 0, rangeIn : [index+delayMatch[0].length, finalCode.length], rangeOut : [rangeOutBegin, finalCode.length] });
+					rangeOutBegin += finalCode.length;
+				}
+				// "}" : mapped to final "}" of the main loop
+				transform.push ( { chapter : 0, rangeIn : [index-1, 1], rangeOut : [rangeOutBegin, 1] });
+				++rangeOutBegin;
+				// parameters of the loop function, mapped to themselves
+				var paramsOffset = loopMatch.index+loopMatch[0].indexOf(loopMatch[1]);
+				transform.push ( { chapter : 0, rangeIn : [paramsOffset, loopMatch[1].length], rangeOut : [rangeOutBegin, paramsCode.length] });
+				rangeOutBegin += paramsCode.length;
+				// code in the loop function, mapped to itself
+				transform.push ( { chapter : 0, rangeIn : [loopMatch.index+loopMatch[0].length, mainLoopCode.length], rangeOut : [rangeOutBegin, mainLoopCode.length] });
+				// "setInterval(" : map to original declaration
+				var blockLength = "setInterval(".length;
+				transform.push ( { chapter : 3, rangeIn : [loopMatch.index, blockLength], rangeOut : [0, blockLength] });
+				// "_" : mapped to "function("
+				transform.push ( { chapter : 3, rangeIn : [functionDeclarationOffset, functionDeclaration.length], rangeOut : [blockLength, 1] });
+				// ",nn)" : map to original declaration
+				transform.push ( { chapter : 3, rangeIn : [index, delayMatch[0].length], rangeOut : [blockLength+1, delayMatch[1].length+2] });				
+				// time declaration variable "t=0" : map to original declaration if any, to function declaration otherwise
+				if (timeDefinitionMatch) {
+					transform.push ( { chapter : 4, rangeIn : [timeDefinitionBegin, timeDefinitionEnd-timeDefinitionBegin], rangeOut : [0, inputData.wrappedInit.length] });				
+				} else {
+					transform.push ( { chapter : 4, rangeIn : [functionDeclarationOffset, functionDeclaration.length], rangeOut : [0, inputData.wrappedInit.length] });				
+				}
+				inputData.thermalMapping.push(transform);
+				
+			} else {	// delayMatch === false
 				details += "Unable to find delay for setInterval, module skipped.\n";
 			}
 			
@@ -326,22 +397,19 @@ ShapeShifter.prototype = {
 	 * even if the preprocessing actually lenghtened the string.
 	 * 
 	 *
-	 * @param inputData (in/out) PackerData structure containing setup data and the code to preprocess
-	 * @param options options set, see below for use details
+	 * @param inputData (constant) PackerData structure containing setup data and the code to preprocess 
+	 * @param options (constant) options set, see below for use details
 	 * Options used are :
 	 *  - contextType : type of context provided by shim : 0 for 2D, 1 for GL
 	 *  - contextVariableName : the variable holding the context if provided by shim, false otherwise
 	 *  - varsNotReassigned : boolean array[128], true to avoid altering variable
-	 * @return the result array, or false if no 2d context definition is found in the code.
+	 * @return an array containing branched (and hashed) PackerData, empty if no 2d context definition is found in the code.
 	 */
 	preprocess2DContext : function(inputData, options) {
 		// Obtain all context definitions (variable name and location in the code)
 		var objectNames = [], objectOffsets = [], objectDeclarationLengths = [], searchIndex = 0;
-		var input = inputData.contents;
-		var initialLog = inputData.log;
 		var variableName = (options.contextType==0?options.contextVariableName:false);
 		var varsNotReassigned = options.varsNotReassigned;
-		initialLog += "----------- Hashing methods/properties for 2D context -----------\n";
 		// Start with the preset context, if any
 		if (variableName)
 		{
@@ -350,7 +418,8 @@ ShapeShifter.prototype = {
 			objectDeclarationLengths.push(0);
 		}
 		// Then search for additional definitions inside the code. Keep name, declaration offset, and declaration length
-		var declarations = input.match (/([\w\d.]*)=[\w\d.]*\.getContext\(['"]2d['"]\)/gi);
+		var input = inputData.contents;
+		var declarations = input.match (/([\w\d.]*)=[\w\d.]*\.getContext\(?[`'"]2d[`'"]\)?/gi);
 		if (declarations) {
 			for (var declIndex=0; declIndex<declarations.length; ++declIndex)
 			{
@@ -366,11 +435,19 @@ ShapeShifter.prototype = {
 		if (objectNames.length) {
 			// obtain the list of properties in a 2D context from the ContextDescriptor
 			var referenceProperties = this.contextDescriptor.canvas2DContextDescription.properties;
-			var hashedCodeM = this.renameObjectMethods(input, objectNames, objectOffsets, objectDeclarationLengths, referenceProperties, varsNotReassigned, initialLog);
-			var hashedCodeP = this.hashObjectProperties(input, objectNames, objectOffsets, objectDeclarationLengths, referenceProperties, varsNotReassigned, initialLog);
-			return [hashedCodeM, hashedCodeP];
+
+			var methodHashedData = PackerData.clone(inputData, " 2D(methods)");
+			methodHashedData.log += "----------- Hashing methods for 2D context -----------\n";
+			// output stored in methodHashedData
+			this.renameObjectMethods(methodHashedData, objectNames, objectOffsets, objectDeclarationLengths, referenceProperties, varsNotReassigned);
+			
+			var propertyHashedData = PackerData.clone(inputData, " 2D(properties)");
+			propertyHashedData.log += "----------- Hashing properties for 2D context -----------\n";
+			// output stored in propertyHashedData
+			this.hashObjectProperties(propertyHashedData, objectNames, objectOffsets, objectDeclarationLengths, referenceProperties, varsNotReassigned);
+			return [methodHashedData, propertyHashedData];
 		}
-		return false;
+		return [];
 	},
 
 	/**
@@ -385,22 +462,20 @@ ShapeShifter.prototype = {
 	 *  - second one has method hashing + GL constants replaced by their value
 	 *  - third one has method + property renaming
 	 *
-	 * @param inputData (in/out) PackerData structure containing setup data and the code to preprocess
-	 * @param options options set, see below for use details
+	 * @param inputData (constant) PackerData structure containing setup data and the code to preprocess
+	 * @param options (constant) options set, see below for use details
 	 * Options used are :
 	 *  - contextType : type of context provided by shim : 0 for 2D, 1 for GL
 	 *  - contextVariableName : the variable holding the context if provided by shim, false otherwise
 	 *  - varsNotReassigned : boolean array[128], true to avoid altering variable
-	 * @return the result array, or false if no webgl context definition is found in the code.
+	 * @return an array containing branched (and hashed) PackerData, empty if no WebGL context definition is found in the code.
 	 */
 	preprocessWebGLContext : function(inputData, options) {
 		// Obtain all context definitions (variable name and location in the code)
 		var objectNames = [], objectOffsets = [], objectDeclarationLengths = [], searchIndex = 0;
 		var input = inputData.contents;
-		var initialLog = inputData.log;
 		var variableName = options.contextType==1?options.contextVariableName:false;
 		var varsNotReassigned = options.varsNotReassigned;
-		initialLog += "----------- Hashing methods/properties for GL context -----------\n";
 		// Start with the preset context, if any
 		if (variableName)
 		{
@@ -409,7 +484,7 @@ ShapeShifter.prototype = {
 			objectDeclarationLengths.push(0);
 		}
 		// Then search for additional definitions inside the code. Keep name, declaration offset, and declaration length
-		var declarations = input.match (/([\w\d.]*)\s*=\s*[\w\d.]*\.getContext\(['"](experimental-)*webgl['"](,[\w\d\s{}:.,!]*)*\)(\s*\|\|\s*[\w\d.]*\.getContext\(['"](experimental-)*webgl['"](,[\w\d\s{}:.,!]*)*\))*/gi);
+		var declarations = input.match (/([\w\d.]*)\s*=\s*[\w\d.]*\.getContext\(?[`'"](experimental-)*webgl[`'"](,[\w\d\s{}:.,!]*)*\)?(\s*\|\|\s*[\w\d.]*\.getContext\(?[`'"](experimental-)*webgl[`'"](,[\w\d\s{}:.,!]*)*\)?)*/gi);
 		if (declarations) {
 			for (var declIndex=0; declIndex<declarations.length; ++declIndex)
 			{
@@ -423,21 +498,29 @@ ShapeShifter.prototype = {
 		}
 			
 		if (objectNames.length) {
-			// list of properties in a 2D context
+			// list of properties in a GL context
 			var referenceProperties = this.contextDescriptor.canvasGLContextDescription.properties;
-		
-			// method only hashing
-			var hashedCodeM = this.renameObjectMethods(input, objectNames, objectOffsets, objectDeclarationLengths, referenceProperties, varsNotReassigned, initialLog);
-			
-			// builds on former, replaces constants as well
-			var hashedCodeMC = this.replaceWebGLconstants(hashedCodeM[1], objectNames, this.contextDescriptor.canvasGLContextDescription.constants,  hashedCodeM[2]);
-			
-			// method and property hashing
-			var hashedCodeP = this.hashObjectProperties(input, objectNames, objectOffsets, objectDeclarationLengths, referenceProperties, varsNotReassigned, initialLog);0
-			return [hashedCodeM, hashedCodeMC, hashedCodeP];
+	
+			var methodHashedData = PackerData.clone(inputData, " WebGL(methods)");
+			methodHashedData.log += "----------- Hashing methods for GL context -----------\n";
+			// output stored in methodHashedData
+			this.renameObjectMethods(methodHashedData, objectNames, objectOffsets, objectDeclarationLengths, referenceProperties, varsNotReassigned);
+
+			// elaborate on the previous result : replace GL constants with values
+			var constantHashedData = PackerData.clone(methodHashedData, " WebGL(methods+constants)");
+			constantHashedData.log += "----------- Replacing constants for GL context -----------\n";
+			// output stored in constantHashedData
+			this.replaceWebGLconstants(constantHashedData, objectNames, this.contextDescriptor.canvasGLContextDescription.constants);
+
+			var propertyHashedData = PackerData.clone(inputData, " WebGL(properties)");
+			propertyHashedData.log += "----------- Hashing properties for GL context -----------\n";
+			// output stored in propertyHashedData
+			this.hashObjectProperties(propertyHashedData, objectNames, objectOffsets, objectDeclarationLengths, referenceProperties, varsNotReassigned);
+	
+			return [methodHashedData, constantHashedData, propertyHashedData];
 		}
 
-		return false;
+		return [];
 	},
 	
 	/**
@@ -447,17 +530,14 @@ ShapeShifter.prototype = {
 	 * even if the replacement actually lenghtened the string.
 	 * Only the constant values in CAPITALS are replaced. Other properties and methods are untouched.
 	 *
-	 * @param input the code to perform replacement on
+	 * @param inputData (in/out) PackerData structure containing setup data and the code to preprocess
 	 * @param objectNames array containing variable names of context objects (mandatory)
 	 * @param referenceConstants : object containing all constants of the GL context
-	 * @param initialLog : the action log, new logs will be appended	 
-	 * @return an array [length, output, user message]
+	 * @return nothing - output is stored in parameter inputData
 	 */
-	replaceWebGLconstants : function (input, objectNames, referenceConstants, initialLog)
-	{
-		var output = input, details=initialLog;
-		for (var contextIndex=0; contextIndex<objectNames.length; ++contextIndex)
-		{
+	replaceWebGLconstants : function (inputData, objectNames, referenceConstants) {
+		var output = inputData.contents, details=inputData.log;
+		for (var contextIndex=0; contextIndex<objectNames.length; ++contextIndex) {
 			var exp = new RegExp("(^|[^\\w$])"+objectNames[contextIndex]+"\\.([0-9A-Z_]*)[^\\w\\d_(]","g");
 			var constantsInUse=[];
 			var result=exp.exec(output);
@@ -473,15 +553,18 @@ ShapeShifter.prototype = {
 				if (constantsInUse[index] in referenceConstants) {
 					var constant = referenceConstants[constantsInUse[index]];
 					var exp = new RegExp("(^|[^\\w$])"+objectNames[contextIndex]+"\\."+constantsInUse[index]+"(^|[^\\w$])","g");						
-					output = output.replace(exp, "$1"+constant+"$2");
+					// output = output.replace(exp, "$1"+constant+"$2");
+					output = this.stringHelper.matchAndReplaceAll(output, exp, objectNames[contextIndex]+"."+constantsInUse[index], constant, "", "", 0, inputData.thermalMapping);
 					// show the renaming in the details
 					details += constantsInUse[index] + " -> " + constant + "\n";
 				}
 			}
 		}
 		details+="\n";
-		return [this.getByteLength(output), output, details];
 		
+		// output stored in inputData parameter
+		inputData.contents = output;
+		inputData.log = details;
 	},
 	
 	/**
@@ -491,12 +574,11 @@ ShapeShifter.prototype = {
 	 * Returns an array in the same format as the compression methods : [output length, output string, informations],
 	 * even if the preprocessing actually lenghtened the string.
 	 *
-	 * @param input the code to preprocess
+	 * @param inputData (constant) PackerData structure containing the code to refactor and setup 
 	 * @param varsNotReassigned boolean array[128], true to keep name of variable
-	 * @param initialLog : the action log, new logs will be appended	 
-	 * @return the result array, or false if no AudioContext definition is found in the code.
+	 * @return an array containing branched (and hashed) PackerData, empty if no AudioContext definition is found in the code.
 	 */
-	preprocessAudioContext : function(input, varsNotReassigned, initialLog) {
+	preprocessAudioContext : function(inputData, varsNotReassigned) {
 		// list of properties in an AudioContext
 		var referenceProperties = this.contextDescriptor.audioContextDescription.properties;
 
@@ -506,8 +588,9 @@ ShapeShifter.prototype = {
 		var objectOffset = 0;
 		var replacementOffset = 0;
 		var objectName = "";
-		var details = initialLog;
-		details += "----------- Hashing methods for AudioContext --------------------\n";
+		var methodHashedData = PackerData.clone(inputData, " Audio");
+		var input = methodHashedData.contents;
+		methodHashedData.log += "----------- Hashing methods for AudioContext --------------------\n";
 
 		// direct instanciation of an AudioContext
 		// var c = new AudioContext()
@@ -554,10 +637,7 @@ ShapeShifter.prototype = {
 				objectName = replacementOffset>webkitReplacementOffset ? resultWebkit[1] : objectName ;
 				
 				// perform the replacement for the latter object first, so the offset of the former is not changed
-
-				var halfReplaced =this.renameObjectMethods(input, [secondObjectName], [secondReplacementOffset], [0], referenceProperties, varsNotReassigned, details);
-				input = halfReplaced[1];
-				details = halfReplaced[2];
+				this.renameObjectMethods(methodHashedData, [secondObjectName], [secondReplacementOffset], [0], referenceProperties, varsNotReassigned);
 			}
 		}
 		// direct instanciation of the appropriate context
@@ -603,10 +683,10 @@ ShapeShifter.prototype = {
 		}
 		
 		if (replacementOffset>0) {
-			var preprocessedCode = this.renameObjectMethods(input, [objectName], [replacementOffset], [0], referenceProperties, varsNotReassigned, details);
-			return preprocessedCode;
+			this.renameObjectMethods(methodHashedData, [objectName], [replacementOffset], [0], referenceProperties, varsNotReassigned);
+			return [methodHashedData];
 		}
-		return false;
+		return [];
 	},
 	
 
@@ -632,19 +712,18 @@ ShapeShifter.prototype = {
 	 *
  	 * Returns an array in the same format as the compression methods : [output length, output string, informations],
 	 *
-	 * @param input : the string to pack
+	 * @param inputData (in/out) PackerData structure containing the code to refactor and setup 
 	 * @param objectNames : array containing variable names of context objects, whose methods to rename in the source string
 	 * @param objectOffsets : array, in the same order, of character offset to the beginning of the object declaration. Zero if defined outside (shim)
 	 * @param objectDeclarationLengths : array, in the same order, of lengths of the object declaration, starting at offset. Zero if defined outside (shim)
 	 * @param referenceProperties : an array of strings containing property names for the appropriate context type
 	 * @param varsNotReassigned : boolean array[128], true to keep name of variable
-	 * @param initialLog : the action log, new logs will be appended
-	 * @return the result of the renaming as an array [output length, output string, informations]
+	 * @return true if the replacement was performed (the gain was >= 0), false otherwise (net loss, replacement cancelled)
 	 */
-	renameObjectMethods : function(input, objectNames, objectOffsets, objectDeclarationLengths, referenceProperties, varsNotReassigned, initialLog)
+	renameObjectMethods : function(inputData, objectNames, objectOffsets, objectDeclarationLengths, referenceProperties, varsNotReassigned)
 	{
-				
-		var details = initialLog || '';
+		var input = inputData.contents;
+		var details = inputData.log;
 		var methodsInUseByContext=[];
 		for (var contextIndex=0; contextIndex<objectNames.length; ++contextIndex)
 		{
@@ -721,7 +800,8 @@ ShapeShifter.prototype = {
 		// bail out early if no gain. Keep if just par, to see how compression behaves
 		if (bestTotalScore < 0) {
 			details += "Best hash loses "+(-bestTotalScore)+" bytes, skipping.\n";
-			return [this.getByteLength(input), input, details];
+			inputData.log = details;
+			return false;
 		}
 		
 		// best hash function (based on byte gain) found. Apply it
@@ -771,7 +851,8 @@ ShapeShifter.prototype = {
 							// The initial \b avoids triggering if one context has a name
 							// ending in another context's name (such as 'c' and 'cc')
 							var exp = new RegExp("\\b"+objectNames[contextIndex]+"\\."+methodsInUse[methodIndex]+"\\(","g");						
-							hashedCode = hashedCode.replace(exp, objectNames[contextIndex]+"."+forwardLookup[methodsInUse[methodIndex]]+"(");
+							//hashedCode = hashedCode.replace(exp, objectNames[contextIndex]+"."+forwardLookup[methodsInUse[methodIndex]]+"(");
+							hashedCode = this.stringHelper.matchAndReplaceAll(hashedCode, exp, methodsInUse[methodIndex], forwardLookup[methodsInUse[methodIndex]], "", "", 0, inputData.thermalMapping);
 
 							// show the renaming in the details, for used methods only
 							details += objectNames[contextIndex]+"."+forwardLookup[methodsInUse[methodIndex]] + " -> " + methodsInUse[methodIndex] + "\n";
@@ -810,7 +891,7 @@ ShapeShifter.prototype = {
 				}
 			}
 		}
-		var output = hashedCode.substr(0, offset);
+		var outputIntro = hashedCode.substr(0, offset);
 		
 		// Insert the hashing/renaming loop in the code.
 		// If the context definition is not included (js1k shim for instance), the loop is prepended to the code and ends with ";"
@@ -820,23 +901,68 @@ ShapeShifter.prototype = {
 		// The ending separator is kept, unless it is a comma ",", in which case it is replaced with a semicolon ";"
 		// (to avoid including the trailing code in the loop)
 		var declarationLength = objectDeclarationLengths[loopContext];
-		output+="for("+indexName+" in "+(declarationLength==0?objectNames[loopContext]:hashedCode.substr(offset, declarationLength))+")";
+		var outputInitBlock1 = "for("+indexName+" in "+(declarationLength==0?objectNames[loopContext]:"");
+		var outputInitBlock2 = (declarationLength==0?"":hashedCode.substr(offset, declarationLength));
+		var outputInitBlock3 = ")";
+		//output+="for("+indexName+" in "+(declarationLength==0?objectNames[loopContext]:hashedCode.substr(offset, declarationLength))+")";
 		for (var contextIndex=0; contextIndex<objectNames.length; ++contextIndex) {
 			if (bestScoreByContext[contextIndex]>=0) {	
-				output+=objectNames[contextIndex]+"["+expression+"]=";
-				needsComma = true;
+				outputInitBlock3+=objectNames[contextIndex]+"["+expression+"]=";
 			}
 		}		
-		output+=objectNames[shortestContext]+"["+indexName+"]";
+		outputInitBlock3+=objectNames[shortestContext]+"["+indexName+"]";
 		if (hashedCode[offset+declarationLength]==",") {
 			// replace the trailing "," with ";" as explained above
-			output+=";";
+			outputInitBlock3+=";";
 			++declarationLength;
 		}
-		output+=(declarationLength==0?";":"");
-		output+=hashedCode.substr(offset+declarationLength);
+		outputInitBlock3+=(declarationLength==0?";":"");
+		var outputMain = hashedCode.substr(offset+declarationLength);
+		var output = outputIntro + outputInitBlock1 + outputInitBlock2 + outputInitBlock3 + outputMain;
 		
-		return [this.getByteLength(output), output, details];
+		// Record the renaming loop in the thermal transform
+		var transform = [ { inLength : hashedCode.length, outLength : output.length, complete : true } ];
+		if (offset) {
+			// code before the context declaration and renaming loop, kept unchanged
+			transform.push ( { chapter : 0, rangeIn : [0, offset], rangeOut : [0, offset] });
+		}
+		var rangeOutBegin = offset;
+		if (declarationLength) {	// context declaration done inside the code
+			// "for (i in " : map to entire hashed code
+			transform.push ( { chapter : 0, 
+							   rangeIn : [offset+declarationLength, outputMain.length], 
+							   rangeOut : [offset, outputInitBlock1.length] });
+			rangeOutBegin += outputInitBlock1.length;
+			// "context=canvas.getContext('2d')" : map as is
+			transform.push ( { chapter : 0, 
+							   rangeIn : [offset, outputInitBlock2.length],
+							   rangeOut : [rangeOutBegin, outputInitBlock2.length] });
+			rangeOutBegin += outputInitBlock2.length;
+			// ")c[...]=c[i]" : map to entire hashed code
+			transform.push ( { chapter : 0, 
+							   rangeIn : [offset+declarationLength, outputMain.length], 
+							   rangeOut : [rangeOutBegin, outputInitBlock3.length] });
+			rangeOutBegin += outputInitBlock3.length;
+		
+		} else {	// context declaration done beforehand (in the shim)
+			// "for (i in c)c[...]=c[i];" : map to entire hashed code
+			transform.push ( { chapter : 0, 
+							   rangeIn : [offset, outputMain.length], 
+							   rangeOut : [offset, outputInitBlock1.length+outputInitBlock2.length+outputInitBlock3.length] });
+			rangeOutBegin += outputInitBlock1.length+outputInitBlock2.length+outputInitBlock3.length;
+		}
+		// code using the hashed contexts
+		transform.push( { 	chapter : 0, 
+							rangeIn : [offset+declarationLength, outputMain.length], 
+							rangeOut : [rangeOutBegin, outputMain.length] });
+		
+		inputData.thermalMapping.push(transform);
+		
+		
+		// output stored in inputData parameter
+		inputData.contents = output;
+		inputData.log = details;
+		return true;
 	},
 
 	
@@ -863,18 +989,18 @@ ShapeShifter.prototype = {
 	 *
  	 * Returns an array in the same format as the compression methods : [output length, output string, informations],
 	 *
-	 * @param input : the string to pack
+	 * @param inputData (in/out) PackerData structure containing the code to refactor and setup 
 	 * @param objectNames : array containing variable names of context objects, whose methods to rename in the source string
 	 * @param objectOffsets : array, in the same order, of character offset to the beginning of the object declaration. Zero if defined outside (shim)
 	 * @param objectDeclarationLengths : array, in the same order, of lengths of the object declaration, starting at offset. Zero if defined outside (shim)
 	 * @param referenceProperties : an array of strings containing property names for the appropriate context type
 	 * @param varsNotReassigned : boolean array[128], true to keep name of variable
-	 * @param initialLog : the action log, new logs will be appended
 	 * @return the result of the renaming as an array [output length, output string, informations]
 	 */
-	hashObjectProperties : function(input, objectNames, objectOffsets, objectDeclarationLengths, referenceProperties, varsNotReassigned, initialLog)
+	hashObjectProperties : function(inputData, objectNames, objectOffsets, objectDeclarationLengths, referenceProperties, varsNotReassigned)
 	{				
-		var details = initialLog || '';
+		var input = inputData.contents;
+		var details = inputData.log;
 		var propertiesInUseByContext=[];
 		for (var contextIndex=0; contextIndex<objectNames.length; ++contextIndex)
 		{
@@ -1015,8 +1141,11 @@ ShapeShifter.prototype = {
 						// The initial character (or line start) avoids triggering if one context has a name
 						// ending in another context's name (such as 'c' and 'cc')
 						var exp = new RegExp("(^|[^\\w$])"+objectNames[contextIndex]+"\\."+propertiesInUse[propertyIndex]+"($|\\W)","g");						
-						hashedCode = hashedCode.replace(exp, "$1"+objectNames[contextIndex]+"["+objectNames[shortestContext]+"."+forwardLookup[propertiesInUse[propertyIndex]]+"]$2");
-
+						var originalText = "."+propertiesInUse[propertyIndex];
+						var replacementText = "["+objectNames[shortestContext]+"."+forwardLookup[propertiesInUse[propertyIndex]]+"]";
+						//hashedCode = hashedCode.replace(exp, "$1"+objectNames[contextIndex]+"["+objectNames[shortestContext]+"."+forwardLookup[propertiesInUse[propertyIndex]]+"]$2");
+						hashedCode = this.stringHelper.matchAndReplaceAll(hashedCode, exp, originalText, replacementText, "", "", 0, inputData.thermalMapping);
+						
 						// show the renaming in the details, for used properties only
 						details += objectNames[contextIndex]+"."+forwardLookup[propertiesInUse[propertyIndex]] + " -> " + propertiesInUse[propertyIndex] + "\n";
 					}
@@ -1048,7 +1177,7 @@ ShapeShifter.prototype = {
 				loopContext = contextIndex;
 			}
 		}
-		var output = hashedCode.substr(0, offset);
+		var outputIntro = hashedCode.substr(0, offset);
 		
 		// Insert the hashing/renaming loop in the code.
 		// If the context definition is not included (js1k shim for instance), the loop is prepended to the code and ends with ";"
@@ -1058,17 +1187,62 @@ ShapeShifter.prototype = {
 		// The ending separator is kept, unless it is a comma ",", in which case it is replaced with a semicolon ";"
 		// (to avoid including the trailing code in the loop)
 		var declarationLength = objectDeclarationLengths[loopContext];
-		output+="for("+indexName+" in "+(declarationLength==0?objectNames[loopContext]:hashedCode.substr(offset, declarationLength))+")";
-		output+=objectNames[shortestContext]+"["+expression+"]="+indexName;
+		var outputInitBlock1 = "for("+indexName+" in "+(declarationLength==0?objectNames[loopContext]:"");
+		var outputInitBlock2 = (declarationLength==0?"":hashedCode.substr(offset, declarationLength));
+		var outputInitBlock3 = ")";
+		//output+="for("+indexName+" in "+(declarationLength==0?objectNames[loopContext]:hashedCode.substr(offset, declarationLength))+")";
+		outputInitBlock3+=objectNames[shortestContext]+"["+expression+"]="+indexName;
 		if (hashedCode[offset+declarationLength]==",") {
 			// replace the trailing "," with ";" as explained above
-			output+=";";
+			outputInitBlock3+=";";
 			++declarationLength;
 		}
-		output+=(declarationLength==0?";":"");
-		output+=hashedCode.substr(offset+declarationLength);
+		outputInitBlock3+=(declarationLength==0?";":"");
+		var outputMain = hashedCode.substr(offset+declarationLength);
+		var output = outputIntro + outputInitBlock1 + outputInitBlock2 + outputInitBlock3 + outputMain;
 		
-		return [this.getByteLength(output), output, details];
+		// Record the renaming loop in the thermal transform
+		var transform = [ { inLength : hashedCode.length, outLength : output.length, complete : true } ];
+		if (offset) {
+			// code before the context declaration and renaming loop, kept unchanged
+			transform.push ( { chapter : 0, rangeIn : [0, offset], rangeOut : [0, offset] });
+		}
+		var rangeOutBegin = offset;
+		if (declarationLength) {	// context declaration done inside the code
+			// "for (i in " : map to entire hashed code
+			transform.push ( { chapter : 0, 
+							   rangeIn : [offset+declarationLength, outputMain.length], 
+							   rangeOut : [offset, outputInitBlock1.length] });
+			rangeOutBegin += outputInitBlock1.length;
+			// "context=canvas.getContext('2d')" : map as is
+			transform.push ( { chapter : 0, 
+							   rangeIn : [offset, outputInitBlock2.length],
+							   rangeOut : [rangeOutBegin, outputInitBlock2.length] });
+			rangeOutBegin += outputInitBlock2.length;
+			// ")c[...]=i" : map to entire hashed code
+			transform.push ( { chapter : 0, 
+							   rangeIn : [offset+declarationLength, outputMain.length], 
+							   rangeOut : [rangeOutBegin, outputInitBlock3.length] });
+			rangeOutBegin += outputInitBlock3.length;
+		
+		} else {	// context declaration done beforehand (in the shim)
+			// "for (i in c)c[...]=i;" : map to entire hashed code
+			transform.push ( { chapter : 0, 
+							   rangeIn : [offset, outputMain.length], 
+							   rangeOut : [offset, outputInitBlock1.length+outputInitBlock2.length+outputInitBlock3.length] });
+			rangeOutBegin += outputInitBlock1.length+outputInitBlock2.length+outputInitBlock3.length;
+		}
+		// code using the hashed contexts
+		transform.push( { 	chapter : 0, 
+							rangeIn : [offset+declarationLength, outputMain.length], 
+							rangeOut : [rangeOutBegin, outputMain.length] });
+		
+		inputData.thermalMapping.push(transform);
+
+
+		// output stored in inputData parameter
+		inputData.contents = output;
+		inputData.log = details;
 	},
 
 	
@@ -1122,12 +1296,14 @@ ShapeShifter.prototype = {
 	 */
 	getMostFrequentLoopVariable : function(input, varsNotReassigned)
 	{
-			// Choose the index variable for the added hashing code
+		// Choose the index variable for the added hashing code
 		// The algorithm counts every instance of "for(*" with individual letters replacing the star
 		// then chooses the letter with the most matches, in order to benefit most from compression
 		var log ="Loop variables :\n";
 		var indexMatches = new Array(128) ;
-		var loopIndexRegExp = /for\((\w)/g;
+
+		// #58 : only choose legal variable names, not digits
+		var loopIndexRegExp = /for\(([A-Za-z_$])/g;
 		var loopIndexResult=loopIndexRegExp.exec(input);
 		while (loopIndexResult) {	// get a set with a unique entry for each property
 			var code = loopIndexResult[1].charCodeAt(0);
@@ -1393,8 +1569,41 @@ ShapeShifter.prototype = {
 		for (var i=0; i<formerVariableCharList.length; ++i)
 		{
 			var oldVarName = formerVariableCharList[i];
-			var exp = new RegExp("(^|[^\\w\\d$_])"+(oldVarName=="$"?"\\":"")+oldVarName,"g");						
-			output = output.replace(exp, "$1"+availableCharList[i]);
+			var exp = new RegExp("(^|[^\\w\\d$_])"+(oldVarName=="$"?"\\":"")+oldVarName,"g");
+			// #57 : replace if not in string, or if inside a substitution pattern in a `template literal`
+			
+			var stringIndex = 0;
+			var variableMatch = exp.exec(output);
+			while (variableMatch && variableMatch[0] != "") {
+				var offset = variableMatch.index+variableMatch[0].indexOf(oldVarName);
+				while (stringIndex < inputData.containedStrings.length && inputData.containedStrings[stringIndex].end < offset) {
+					++stringIndex;
+				}
+				var doReplace = true;
+				if (stringIndex < inputData.containedStrings.length 
+					&& inputData.containedStrings[stringIndex].begin < offset
+					&& offset < inputData.containedStrings[stringIndex].end) {
+					// the match is inside a string
+					doReplace = false;
+					// browse the string to find an ES6 substitution pattern : ${ ... }
+					for (var index=inputData.containedStrings[stringIndex].begin; index<offset; ++index) {
+						if (output.charCodeAt(index-1)!=92 && output.charCodeAt(index)==36 && output.charCodeAt(index+1)==123) {
+							// ${ not preceded by \ : beginning of a substitution pattern
+							doReplace = true;
+						}
+						if (output.charCodeAt(index-1)!=92 && output.charCodeAt(index)==125) {
+							// } not preceded by \ : end of a substitution pattern
+							doReplace = false;
+						}
+					}					
+				}
+				if (doReplace) {
+					output = output.substr(0, offset) + availableCharList[i] + output.substr(offset+1);
+				}
+				
+				variableMatch = exp.exec(output);
+			}
+
 			// Perform the replacement on the code appended by refactorToSetInterval()
 			inputData.interpreterCall = inputData.interpreterCall.replace(exp, "$1"+availableCharList[i]);
 			inputData.wrappedInit = inputData.wrappedInit.replace(exp, "$1"+availableCharList[i]);
@@ -1410,8 +1619,191 @@ ShapeShifter.prototype = {
 		// output stored in inputData parameter instead of being returned
 		inputData.contents = output;
 		inputData.log += details;		
-	}
+	},
+	
+	/**
+	 * Recognize all strings inside the input code
+	 *
+	 * Offset to beginning and end are stored into a table, along with
+	 *  - delimiters used : ", ' or `(since ES6)
+	 *  - other delimiters present inside the string
+     *  - if the string definition and allocation is standalone, and could thus be extracted	 
+	 * @param inputData (in/out) PackerData structure containing the setup and the code to process
+	 * @param options options set, see below for use details
+	 * @return nothing. Result is stored inside parameter inputData.
+	 * Options used are :
+	 *  none so far
+	 */
+	identifyStrings : function (inputData, options)
+	{
+		var details = "\nStrings present in the code :\n";
+		var inString = false;
+		var currentString = false;
+		var input = inputData.contents;
+		var escaped = false;
 
+		for (var i=0; i<input.length; ++i) {
+			var currentChar = input.charCodeAt(i);
+			// delimiters : 34 " , 39 ' , 96 `
+			if (currentChar==34 || currentChar==39 || currentChar==96) {
+				if (currentString) {
+					if (currentChar == currentString.delimiter && !escaped) {
+						// found the match to the string begin
+						currentString.end = i;
+						inputData.containedStrings.push(currentString);
+						details += "("+currentString.begin+"-"+currentString.end+") ";
+						details += currentString.characterCount[39]+"' "+currentString.characterCount[34]+'" '+currentString.characterCount[96]+"` ";
+						details += String.fromCharCode(currentString.delimiter)+input.substr(currentString.begin+1, currentString.end-currentString.begin-1)+String.fromCharCode(currentString.delimiter)+"\n";
+						currentString = false;
+					} else {
+						// another delimiter in the string, such as "`" or '"'
+						++currentString.characterCount[currentChar];
+					}
+				} else {
+					// start a new string
+					inString = true;
+					currentString = { begin:i, end:-1, delimiter:currentChar, characterCount:Array(128).fill(0) };
+				}
+			}
+			escaped = (currentChar==92 && !escaped);
+		}
+		inputData.log+=details+"\n";
+	},
+	
+	/**
+	 * Choose the delimiter for the final (packed) string
+	 *
+	 * Change the delimiters for strings inside as needed
+	 *
+	 * @param inputData (in/out) PackerData structure containing the setup and the code to process
+	 * @param options options set, see below for use details
+	 * @return nothing. Result is stored inside parameter inputData.
+	 * Options used are :
+	 *  useES6 : try ` as string delimiter if enables
+	 */
+	quoteStrings : function (inputData, options) {
+		// candidate delimiters
+		var allDelimiters = [ "'", '"' ];
+		if (options.useES6) {
+			allDelimiters.push("`");
+		}
+		
+		var bestCost = 999, bestDelimiter = '"', bestNewStringQuotes = 0;
+		var details = "\Wrapping packed code in :\n";
+		for (var delimiter of allDelimiters) {
+			var cost = 0;
+			var delimCode = delimiter.charCodeAt(0);
+			var newStringQuotes = [];
+			for (var i=0; i<inputData.containedStrings.length; ++i) {
+				cost += inputData.containedStrings[i].characterCount[delimCode] + (inputData.containedStrings[i].delimiter==delimCode ? 2 : 0);
+				
+				var bestNewQuote = String.fromCharCode(inputData.containedStrings[i].delimiter);
+				if (inputData.containedStrings[i].delimiter != 96) {
+					// Attempt to regain bytes by changing the string delimiter 
+					// only if it is ' or ", not ` as this would disable template literals
+					//  - gain all escapes from current delimiter being present inside the string
+					//  - gain 2 if the current string delimiter matches the chosen one for the packed string (as it will not have to be escaped)
+					//  - lose 1 for each copy of the new delimiter within the string
+					//  - lose 2 if the new string delimiter matches the chosen one for the packed string (as it will have to be escaped)
+					var bestStringGain = 0; 
+					var allStringDelimiters = [ "'", '"' ];
+					// only allow ` as delimiter if both ES6 flag is on, and the string does not contain "${"
+					// (as it would be mistaken for an expression placeholder)
+					var placeholderIndex = inputData.contents.indexOf("${", inputData.containedStrings[i].begin);
+					if (options.useES6 && (placeholderIndex==-1 || placeholderIndex>inputData.containedStrings[i].end)) {
+						allStringDelimiters.push("`");
+					}
+					for (var stringDelimiter of allStringDelimiters) {
+						var stringGain = 0;
+						var stringDelimCode = stringDelimiter.charCodeAt(0);
+						stringGain = inputData.containedStrings[i].characterCount[inputData.containedStrings[i].delimiter];
+						stringGain += inputData.containedStrings[i].delimiter==delimCode ? 2 : 0;
+						stringGain -= inputData.containedStrings[i].characterCount[stringDelimCode];
+						stringGain -= stringDelimCode==delimCode ? 2 : 0;
+						
+						// give a slight malus when changing the delimiter of a string
+						// so if the cost is tied, the solution that changes the least strings is preferred
+						stringGain -= (inputData.containedStrings[i].delimiter == stringDelimCode ? 0 : 0.01);
+						if (stringGain > bestStringGain) {
+							bestNewQuote = stringDelimiter;
+							bestStringGain = stringGain;
+						}
+					}
+					
+					cost -= bestStringGain;
+				}
+				newStringQuotes.push(bestNewQuote);
+			}
+								
+			details += " "+delimiter+" : cost = "+cost+"\n";
+			if (cost < bestCost) {
+				bestDelimiter = delimiter;
+				bestCost = cost;
+				bestNewStringQuotes = newStringQuotes.slice();
+			}
+		}
+		inputData.packedStringDelimiter = bestDelimiter;
+		
+		// perform replacement in strings
+		// we cannot use stringHelper.matchAndReplaceAll() as only some instances of the string are replaced in the code
+		var currentTransform = [];
+		var newInput = "", offset = 0;
+		for (var i=0; i<inputData.containedStrings.length; ++i) {
+			var currentString = inputData.containedStrings[i];
+			let intervalMapping = {	// transform : iso mapping of the space between two strings
+				chapter : 0,
+				rangeIn : [offset, currentString.begin-offset],
+				rangeOut: [newInput.length, currentString.begin-offset]
+			};
+			currentTransform.push(intervalMapping);
+			newInput += inputData.contents.substr(offset, currentString.begin-offset);
+			var newDelimiter = bestNewStringQuotes[i];
+			var currentDelimiter = String.fromCharCode(currentString.delimiter);
+			let stringMapping = { // transform : mapping of the string before / after
+				// initialize with an iso mapping
+				chapter : 0,
+				rangeIn : [currentString.begin, currentString.end-currentString.begin+1],
+				rangeOut: [newInput.length, currentString.end-currentString.begin+1]
+			};
+			if (currentString.delimiter == newDelimiter) {
+				// keep the delimiter for the current string 
+				// copy as is and keep the iso mapping
+				newInput += inputData.contents.substr(currentString.begin, currentString.end-currentString.begin+1);
+			} else {
+				// replace the delimiter, escape and unescape as needed
+				var exp = new RegExp("\\"+currentDelimiter, "g");
+				var rawString = inputData.contents.substr(currentString.begin+1, currentString.end-currentString.begin-1);
+				rawString = rawString.replace(exp, currentDelimiter);
+				exp = new RegExp(newDelimiter, "g");
+				rawString = rawString.replace(exp, "\\"+newDelimiter);
+				var quote = (newDelimiter==inputData.packedStringDelimiter ? "\\" : "")+newDelimiter;
+				
+				details += "("+currentString.begin+"-"+currentString.end+") : ";
+				details += String.fromCharCode(inputData.containedStrings[i].delimiter)+" -> "+newDelimiter+"\n";
+				inputData.containedStrings[i].begin = newInput.length;
+				inputData.containedStrings[i].delimiter = newDelimiter;
+				var replacementString = quote + rawString + quote;
+				stringMapping.rangeOut[1] = replacementString.length;	// map to actual length
+				newInput += replacementString;
+				inputData.containedStrings[i].end = newInput.length-1;
+				
+			}
+			offset = currentString.end+1;
+			currentTransform.push(stringMapping);
+			
+		}
+		newInput += inputData.contents.substr(offset);
+		let intervalMapping = {	// transform : iso mapping of the space at the end
+				chapter : 0,
+				rangeIn : [offset, inputData.contents.length-offset],
+				rangeOut: [newInput.length, inputData.contents.length-offset]
+			};
+		currentTransform.push(intervalMapping);
+		inputData.contents = newInput;
+		
+		inputData.log+=details+"\n";		
+	}
+	
 }
 
 // Node.js exports (for packer)

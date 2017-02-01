@@ -2,15 +2,11 @@
 <html>
 <head>
 	<meta charset="utf-8">
-	<title>RegPack v4.0.1</title>
+	<title>RegPack v5.0.0</title>
 	<style type="text/css">
 #options {
   border:1px solid gray;
   padding:5px;
-}
-
-.source {
-  box-shadow: 0px 0px 8px 1px rgb(0, 128, 255) inset;
 }
 
 .best {
@@ -25,8 +21,42 @@ b.bestMessage {
 	text-shadow: 1px 1px 1px rgb(0, 192, 0)
 }
 
-div#output {
+div#output{
 	display:none;
+}
+
+div#thermalColumn{
+	visibility:hidden;
+}
+
+div.dock {
+	display:flex;
+	overflow:hidden;
+}
+
+div.dockControl {
+	height:20px;
+	margin:1px;
+	border:solid #888 1px;
+	box-sizing: border-box;
+	background-image:linear-gradient(#aaa,#ddd,#eee);
+	text-align:center;
+	text-shadow:#fff 1px 1px;
+	color:#444;
+	line-height:19px;
+}
+
+div.dockControl:hover {
+	background-image:linear-gradient(#adf,#def,#eff);
+}
+
+div.dockControl:active {
+	background-image:linear-gradient(#6ce,#bdf,#cef);
+}
+
+div.column {
+	flex:1;
+	height:15em;
 }
 
 div.textBox {
@@ -41,6 +71,19 @@ div.textBox {
 	min-height:8em;
 }
 
+
+div#thermalView {
+	width:100%;
+	padding:1px;
+	border:1px solid;
+	border-color:#888 #ccc #ccc #888;
+	margin: 1px 0px 1px 0px;
+	box-sizing: border-box;
+	vertical-align: top;
+	height:14em;
+	overflow-y:scroll;
+}
+
 textarea {
 	width:50%;
 	margin: 1px 0px 1px 0px;
@@ -50,6 +93,12 @@ textarea {
 	border-color:#888 #ccc #ccc #888;
 	vertical-align: top;
 	word-break: break-all;
+}
+
+textarea.source {
+    box-shadow: 0px 0px 8px 1px rgb(0, 128, 255) inset;
+	width:100%;
+	height:17em;
 }
 
 pre.topLevel {
@@ -102,12 +151,68 @@ span.depth9 {
 	background-color:#F40;
 }
 
+span.thermal0 {
+	background-color:#64679d;
+}
+
+span.thermal1 {
+	background-color:#5884cc;
+}
+
+span.thermal2 {
+	background-color:#6cc3d4;
+}
+
+span.thermal3 {
+	background-color:#66e18b;
+}
+
+span.thermal4 {
+	background-color:#a6ec66;
+}
+
+span.thermal5 {
+	background-color:#f1fc66;
+}
+
+span.thermal6 {
+	background-color:#fcd966;
+}
+
+span.thermal7 {
+	background-color:#fcac66;
+}
+
+span.thermal8 {
+	background-color:#f26464;
+}
+
+span.thermal9 {
+	background-color:#ce6464;
+}
+
+span.thermal10 {
+	background-color:#ab6464;
+}
+
+span.thermal11 {
+	background-color:#886464;
+}
 
  	</style>
 </head>
 <body>
+<div class="dock">
+<div id="inputColumn" class="column">
 <b>Original source</b>
-<br><textarea rows=12 id="originalString" class="source"></textarea>
+<br><textarea id="originalString" class="source"></textarea>
+</div><div id="thermalColumn" class="column">
+<span class="thermal0">0+ </span><span class="thermal1">1+ </span><span class="thermal2">2+ </span><span class="thermal3">3+ </span><span class="thermal4">4+ </span><span class="thermal5">5+ </span><span class="thermal6">6+ </span><span class="thermal7">7+ </span><span class="thermal8">8+ </span><span class="thermal9">9+ </span><span class="thermal10">10+ </span><span class="thermal11">11+ </span>
+bits/original byte
+<div id="thermalView"></div>
+</div>
+</div>
+<div class="dockControl" id="inputDockControl">&#9660;</div><br>
 <fieldset>
 Attempt method hashing and renaming for
 <input type="checkbox" name="paramOHash2D" id="paramOHash2D" checked="checked"/>2D canvas context
@@ -119,6 +224,7 @@ Attempt method hashing and renaming for
 </select> <i>(as in js1k shim)</i>
 <br><input type="checkbox" name="paramOReassignVars" id="paramOReassignVars" checked="checked"/> Reassign variable names to produce consecutive character blocks,
 except for variables <input type="text" value="a b c d g" id="paramOExcludedVars" />
+<br><input type="checkbox" name="paramUseES6" id="paramUseES6" checked="checked"/> Enable ES6 features.
 </fieldset>
 <fieldset>
 <legend><i>Options impacting performance</i></legend>
@@ -127,7 +233,7 @@ except for variables <input type="text" value="a b c d g" id="paramOExcludedVars
 <input type="text" size=4  id="paramOTimeVariable" /> for time <i>(leave empty to assign one. Time variable should be zero on the first loop and nonzero afterwards)</i>.
 </fieldset>
 <fieldset>
-<legend><b class="bestMessage">RegPack v4.0.1</b></legend>
+<legend><b class="bestMessage">RegPack v5.0.0</b></legend>
 <button id="packAction">Pack</button>
 Score = <input type="text" size=6 value=1 id="paramFGain" />
 *gain + <input type="text" size=6 value=0 id="paramFLength" />
@@ -157,10 +263,12 @@ Tiebreaker = <select id="paramFTiebreaker">
 </div>
 </div>
 <script src="contextDescriptor_browser.js"></script>
+<script src="stringHelper.js"></script>
 <script src="packerData.js"></script>
 <script src="shapeShifter.js"></script>
 <script src="regPack.js"></script>
 <script src="patternViewer.js"></script>
+<script src="thermalViewer.js"></script>
 <script>
 
 var outputCode = [];
@@ -171,7 +279,13 @@ function doRegPack() {
 		document.getElementById("stage"+j+"Output").value = "";
 		document.getElementById("stage"+j+"Details").value = ""	
 	}
-	var input = document.getElementById("originalString").value.replace(/([\r\n]|^)\s*\/\/.*|[\r\n]+\s*/g,'');
+	// Implementation for issue #33 : append the code to the URL
+	var input = document.getElementById("originalString").value;
+	var urlArray = window.location.href.split("#code=");
+	window.location.href = urlArray[0]+"#code="+StringHelper.getInstance().unicodeToBase64(input);
+	
+	// Get rid of comments and empty lines
+	input = input.replace(/([\r\n]|^)\s*\/\/.*|[\r\n]+\s*/g,'');
 	var options = {
 		withMath : document.getElementById("paramOWithMath").checked!="",
 		hash2DContext : document.getElementById("paramOHash2D").checked!="",
@@ -187,14 +301,16 @@ function doRegPack() {
 		crushTiebreakerFactor : parseInt(document.getElementById("paramFTiebreaker").value),
 		wrapInSetInterval : document.getElementById("paramOWrapInSetInterval").checked!="",
 		timeVariableName : document.getElementById("paramOTimeVariable").value,
+		useES6 : document.getElementById("paramUseES6").checked!=""
 	};
 
 	var originalLength = packer.getByteLength(input);
 	var inputList = packer.runPacker(input, options);
 	var methodCount = inputList.length;
 	var patternViewer = new PatternViewer;
-	
-	var bestMethod=0, bestCompression=1e8;
+	var thermalViewer = new ThermalViewer;
+		
+	var bestMethod=0, bestStage=0, bestCompression=1e8;
 	for (var i=0; i<methodCount; ++i) {
 		var packerData = inputList[i];
 		for (var j=0; j<4; ++j) {
@@ -203,6 +319,7 @@ function doRegPack() {
 			if (packedLength < bestCompression) {
 				bestCompression = packedLength;
 				bestMethod = i;
+				bestStage = j;
 			} 
 		}
 	} 
@@ -229,7 +346,8 @@ function doRegPack() {
 		document.getElementById("stage"+j+"Message").setAttribute("class", bestCompression==outputLength ? "bestMessage" : "");
 		document.getElementById("stage"+j+"Base64").onclick = function(index) {
 			return function() { 
-				document.getElementById("stage"+index+"Output").value = this.checked ? btoa(outputCode[index]) : outputCode[index];
+				// #52 : use StringHelper implementation instead of btoa() to handle Unicode characters > 255
+				document.getElementById("stage"+index+"Output").value = this.checked ? StringHelper.getInstance().unicodeToBase64(outputCode[index]) : outputCode[index];
 			};
 		} (j);
 		document.getElementById("stage"+j+"Base64").onclick();	// set the textarea contents, raw or base64
@@ -238,6 +356,20 @@ function doRegPack() {
 		document.getElementById("stage"+j+"Output").setAttribute("class", bestCompression==outputLength ? "best" : "");
 		document.getElementById("stage"+j+"Details").value = bestOutput.result[stage][2];
 	}
+	
+	// clear the thermal view, draw and show it
+	document.getElementById("thermalColumn").style.visibility="visible";
+	var thermalViewPanel = document.getElementById("thermalView");
+	while (thermalViewPanel.firstChild) {
+		thermalViewPanel.removeChild(thermalViewPanel.firstChild);
+	}
+	var completeMapping = bestOutput.thermalMapping;	// thermal map from preprocessing
+	if (bestStage > 0) {
+		// thermal map from packing
+		completeMapping = completeMapping.concat(bestOutput.result[bestStage-1][3]);
+	}
+	thermalViewPanel.appendChild(thermalViewer.render(input, completeMapping));
+
 }
 
 
@@ -246,14 +378,43 @@ document.getElementById("packAction").onclick=function()
 	doRegPack();
 }
 
+document.addEventListener("DOMContentLoaded", function(event) {
+	// Fix for issue #12 : disable AudioContext hashing if the browser does not support it
+	if (typeof AudioContext == "undefined") {
+		hashAudioCheckbox = document.getElementById("paramOHashAudio");
+		hashAudioCheckbox.checked = false;
+		hashAudioCheckbox.disabled = true;
+	}
 	
-// Fix for issue #12 : disable AudioContext hashing if the browser does not support it
-if (typeof AudioContext == "undefined")
-{
-	hashAudioCheckbox = document.getElementById("paramOHashAudio");
-	hashAudioCheckbox.checked = false;
-	hashAudioCheckbox.disabled = true;
-}
+	// Implementation for issue #33 : retrieve the original code from the URL, if present, and store in into input box
+	var urlArray = window.location.href.split("#code=");
+	if (urlArray.length == 2) {
+		document.getElementById("originalString").value = StringHelper.getInstance().base64ToUnicode(urlArray[1]);
+	}
+ 
+	// Following #26, add a dock option for the first row containing input and thermal view 
+	document.getElementById("inputDockControl").docked=true;
+	document.getElementById("inputDockControl").onclick = function(event) {
+		this.docked = !this.docked;
+		
+		var originalStringView = document.getElementById("originalString");
+		var originalStringViewHeight="17em";
+		if (!this.docked) {
+			originalStringView.style.height = "auto";
+			originalStringViewHeight = (originalStringView.scrollHeight)+"px"
+		}
+		originalStringView.style.height = originalStringViewHeight;
+		originalStringView.style.overflowY = (this.docked ? "scroll" : "hidden");
+		
+		document.getElementById("thermalView").style.overflowY = this.docked ? "scroll" : "auto";
+		document.getElementById("thermalView").style.height = this.docked ? "14em" : "auto";
+		document.getElementById("thermalColumn").style.height = this.docked ? "15em" : "auto";
+		document.getElementById("inputColumn").style.height = this.docked ? "15em" : "auto";
+		this.firstChild.data = this.docked ? "\u25bc" : "\u25b2";
+	}
+
+});
+
  
 
 </script>
