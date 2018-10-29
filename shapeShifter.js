@@ -42,16 +42,16 @@ ShapeShifter.prototype = {
 	/**
 	 * Preparation stage : attempt to rehash the methods from canvas context
 	 * Produces a pair of hashed/not hashed strings for each option
-	 * so each selected flag doubles the number of tests.
+	 * so each selected "splitter" flag doubles the number of tests. 
 	 * Creates a list with all the combinations to feed to the packer, one at a time.
 	 * "with Math()" option is applied on all entries if selected (does not create a pair)
 	 *
 	 * @param input : the string to pack
 	 * @param options : preprocessing options, as follows
 	 *       -  withMath : true if the option "Pack with(Math)" was selected, false otherwise
-	 *       -  hash2DContext : true if the option "Hash and rename 2D canvas context" was selected, false otherwise
-	 *       -  hashWebGLContext : true if the option "Hash and rename WebGL canvas context" was selected, false otherwise
-	 *       -  hashAudioContext : true if the option "Hash and rename AudioContext" was selected, false otherwise
+	 *       -  hash2DContext : (splitter) true if the option "Hash and rename 2D canvas context" was selected, false otherwise
+	 *       -  hashWebGLContext : (splitter) true if the option "Hash and rename WebGL canvas context" was selected, false otherwise
+	 *       -  hashAudioContext : (splitter) true if the option "Hash and rename AudioContext" was selected, false otherwise
 	 *       -  contextVariableName : a string representing the variable holding the context if the "assume context" option was selected, false otherwise
 	 *       -  contextType : the context type (0=2D, 1=WebGL) if the "assume context" option was selected, irrelevant otherwise
 	 *       -  reassignVars : true to globally reassign variable names 
@@ -59,6 +59,7 @@ ShapeShifter.prototype = {
 	 *       -  wrapInSetInterval : true to wrap the unpacked code in a setInterval() call instead of eval()
 	 *       -  timeVariableName : if "setInterval" option is set, the variable to use for time (zero on first loop, nonzero after)
 	 *       -  useES6 : true to add ES6 constructs to the code, false otherwise
+	 * @return an array of PackerData, representing all combinations for splitter flags  
 	 */
 	preprocess : function(input, options) {
 	
@@ -133,7 +134,7 @@ ShapeShifter.prototype = {
 		inputList[0].name="unhashed";
 
 		for (var i=0; i<inputList.length; ++i) {
-			this.identifyStrings(inputList[i], options);
+			this.identifyStrings(inputList[i]);
 			// call module : quote strings
 			this.quoteStrings(inputList[i], options);
 			if (options.reassignVars) {
@@ -145,10 +146,10 @@ ShapeShifter.prototype = {
 	},
 
 	/**
-	 * Modifies the environment execution of the unpacked code,
-	 * wrapping it into with(Math).
+	 * Modifies the environment execution of the unpacked code, wrapping it into with(Math).
 	 * Removes all references to Math. in the input code
 	 * @param inputData (in/out) PackerData structure containing the code to refactor and setup 
+	 * @return nothing. Result of refactoring is stored in parameter inputData.
 	 */
 	defineEnvironment : function(inputData) {
 		inputData.environment = 'with(Math)';
@@ -1257,6 +1258,9 @@ ShapeShifter.prototype = {
 	 *  1 for ASCII char
 	 *  3 for Unicode (UTF-8)
 	 * Issue #5 : final size when featuing unicode characters
+	 *
+	 * @param inString the string to measure
+	 * @return the UTF-8 length of the string, in bytes 
 	 */
 	getByteLength : function (inString)
 	{
@@ -1266,6 +1270,9 @@ ShapeShifter.prototype = {
 	/**
 	 * Returns true if the character code is allowed in the name of a variable.
 	 * Allowed codes are 36($), 48-57(0-9), 65-90(A-Z), 95(_), 97-122(a-z)
+	 *
+	 * @param charCode ASCII code of the character (variables with Unicode > 127 are not accepted)
+	 * @return true if the character is allowed in the name of a variable, false otherwie
 	 */
 	isCharAllowedInVariable : function (charCode)
 	{
@@ -1276,6 +1283,8 @@ ShapeShifter.prototype = {
 
 	/**
 	 * Returns true if the character code is a digit
+	 * @param charCode ASCII or Unicode value of the character
+	 * @return true for digits (0 to 9 = ASCII 48 to 57), false otherwise
 	 */
 	isDigit : function (charCode)
 	{
@@ -1342,11 +1351,11 @@ ShapeShifter.prototype = {
 	 * Defines and returns a packer-friendly name for a new variable.
 	 * 
 	 * It first lists characters used in keywords but not in existing variables.
-	 * If none is found, it takes the first character not assigned
-	 * to a variable.
+	 * If none is found, it takes the first character not assigned to a variable.
 	 * If none is available, it returns a two-letter variable.
 	 * 
 	 * @param input the input code to preprocess / pack
+	 * @return the name of the new variable, as a string
 	 * @see discriminateKeywordsAndVariables
 	 */
 	allocateNewVariable : function(input)
@@ -1391,16 +1400,17 @@ ShapeShifter.prototype = {
 	 * @see reassignVariableNames
 	 * @see allocateNewVariable
 	 * 
-	 * @param input the input code to preprocess / pack
+	 * @param inputData PackerData structure containing the setup and the code to process
 	 * @return array [ keywords, variables ], each is a boolean [128]
 	 */
-	discriminateKeywordsAndVariables : function(input)
+	discriminateKeywordsAndVariables : function(inputData)
 	{
 		var variableChars = [];
 		var keywordChars = [];
 		var previousChar = 0;
 		var letterCount = 0;
 		var isKeyword = false;
+		var input = inputData.contents;
 		for (var i=0; i<128; ++i) {
 			variableChars[i] = keywordChars[i] = false;
 		}
@@ -1408,20 +1418,41 @@ ShapeShifter.prototype = {
 		//  - those used only in keywords, method names.
 		//  - those used as one-letter variable or function names only (and candidates to renaming)
 		//  - those used for both variable names and within keywords
-				
-		for (var i=0; i<input.length; ++i) {
-			var currentChar = input.charCodeAt(i);
+
+		var stringIndex = 0, templateLiteralIndex = 0;
+		for (var offset=0; offset<input.length; ++offset) {
+			
+			var currentChar = input.charCodeAt(offset);
 			if (currentChar<128) {
 				if (this.isCharAllowedInVariable(currentChar)) {
-					++letterCount;
-					if (letterCount>1) {
-						isKeyword=true;
-						keywordChars[previousChar]=true;
+				
+					while (stringIndex < inputData.containedStrings.length && inputData.containedStrings[stringIndex].end < offset) {
+						++stringIndex;
+					}
+					while (templateLiteralIndex < inputData.containedTemplateLiterals.length && inputData.containedTemplateLiterals[templateLiteralIndex].end < offset) {
+						++templateLiteralIndex;
+					}
+					var insideString = (stringIndex < inputData.containedStrings.length 
+						&& inputData.containedStrings[stringIndex].begin < offset
+						&& offset < inputData.containedStrings[stringIndex].end);
+					var insideTemplateLiteral = (templateLiteralIndex < inputData.containedTemplateLiterals.length 
+						&& inputData.containedTemplateLiterals[templateLiteralIndex].begin < offset
+						&& offset < inputData.containedTemplateLiterals[templateLiteralIndex].end);
+					
+					if (insideString && !insideTemplateLiteral) {
+						// #76 : characters inside a string, out of a template literal ${...}, are not variables
 						keywordChars[currentChar]=true;
-					} else {
-						if (previousChar == 46) { // character .
+					} else { // in a template literal, or not in a string (variables allowed)
+						++letterCount;
+						if (letterCount>1) {
 							isKeyword=true;
+							keywordChars[previousChar]=true;
 							keywordChars[currentChar]=true;
+						} else {
+							if (previousChar == 46) { // character .
+								isKeyword=true;
+								keywordChars[currentChar]=true;
+							}
 						}
 					}
 				} else {
@@ -1464,12 +1495,12 @@ ShapeShifter.prototype = {
 	 */
 	reassignVariableNames : function (inputData, options)
 	{
-		var input = inputData.contents;
 		var varsNotReassigned = options.varsNotReassigned;
-		var keywordsAndVariables = this.discriminateKeywordsAndVariables(input);
+		var keywordsAndVariables = this.discriminateKeywordsAndVariables(inputData);
 		var keywordChars = keywordsAndVariables[0];
 		var variableChars = keywordsAndVariables[1];
-
+		var input = inputData.contents;
+		
 		var details = "----------- Renaming variables to optimize RegExp blocks --------\n";
 		details += "All variables : ";
 		for (var i=32; i<128; ++i) {
@@ -1578,35 +1609,26 @@ ShapeShifter.prototype = {
 			var exp = new RegExp("(^|[^\\w\\d$_])"+(oldVarName=="$"?"\\":"")+oldVarName,"g");
 			// #57 : replace if not in string, or if inside a substitution pattern in a `template literal`
 			
-			var stringIndex = 0;
+			var stringIndex = 0, templateLiteralIndex = 0;
 			var variableMatch = exp.exec(output);
 			while (variableMatch && variableMatch[0] != "") {
 				var offset = variableMatch.index+variableMatch[0].indexOf(oldVarName);
 				while (stringIndex < inputData.containedStrings.length && inputData.containedStrings[stringIndex].end < offset) {
 					++stringIndex;
 				}
-				var doReplace = true;
-				if (stringIndex < inputData.containedStrings.length 
-					&& inputData.containedStrings[stringIndex].begin < offset
-					&& offset < inputData.containedStrings[stringIndex].end) {
-					// the match is inside a string
-					doReplace = false;
-					// browse the string to find an ES6 substitution pattern : ${ ... }
-					for (var index=inputData.containedStrings[stringIndex].begin; index<offset; ++index) {
-						if (output.charCodeAt(index-1)!=92 && output.charCodeAt(index)==36 && output.charCodeAt(index+1)==123) {
-							// ${ not preceded by \ : beginning of a substitution pattern
-							doReplace = true;
-						}
-						if (output.charCodeAt(index-1)!=92 && output.charCodeAt(index)==125) {
-							// } not preceded by \ : end of a substitution pattern
-							doReplace = false;
-						}
-					}					
+				while (templateLiteralIndex < inputData.containedTemplateLiterals.length && inputData.containedTemplateLiterals[templateLiteralIndex].end < offset) {
+					++templateLiteralIndex;
 				}
-				if (doReplace) {
+				var insideString = (stringIndex < inputData.containedStrings.length 
+					&& inputData.containedStrings[stringIndex].begin < offset
+					&& offset < inputData.containedStrings[stringIndex].end);
+				var insideTemplateLiteral = (templateLiteralIndex < inputData.containedTemplateLiterals.length 
+					&& inputData.containedTemplateLiterals[templateLiteralIndex].begin < offset
+					&& offset < inputData.containedTemplateLiterals[templateLiteralIndex].end);
+					
+				if (insideTemplateLiteral || !insideString) {	// perform replacement
 					output = output.substr(0, offset) + availableCharList[i] + output.substr(offset+1);
 				}
-				
 				variableMatch = exp.exec(output);
 			}
 
@@ -1628,32 +1650,33 @@ ShapeShifter.prototype = {
 	},
 	
 	/**
-	 * Recognize all strings inside the input code
+	 * Recognize all strings and template literals inside the input code
 	 *
 	 * Offset to beginning and end are stored into a table, along with
 	 *  - delimiters used : ", ' or `(since ES6)
 	 *  - other delimiters present inside the string
      *  - if the string definition and allocation is standalone, and could thus be extracted	 
 	 * @param inputData (in/out) PackerData structure containing the setup and the code to process
-	 * @param options options set, see below for use details
-	 * @return nothing. Result is stored inside parameter inputData.
-	 * Options used are :
-	 *  none so far
+	 * @return nothing. Result is stored inside parameter inputData (containedStrings and containedTemplateLiterals)
 	 */
-	identifyStrings : function (inputData, options)
+	identifyStrings : function (inputData)
 	{
 		var details = "\nStrings present in the code :\n";
 		var inString = false;
 		var currentString = false;
+		var currentTemplateLiteral = false;
 		var input = inputData.contents;
 		var escaped = false;
+		var insideTemplateLiteral = 0;
+		var currentChar = 0;
 
 		for (var i=0; i<input.length; ++i) {
-			var currentChar = input.charCodeAt(i);
+			var formerChar = currentChar;
+			currentChar = input.charCodeAt(i);
 			// delimiters : 34 " , 39 ' , 96 `
 			if (currentChar==34 || currentChar==39 || currentChar==96) {
 				if (currentString) {
-					if (currentChar == currentString.delimiter && !escaped) {
+					if (currentChar == currentString.delimiter && !escaped && !insideTemplateLiteral) {
 						// found the match to the string begin
 						currentString.end = i;
 						inputData.containedStrings.push(currentString);
@@ -1670,10 +1693,40 @@ ShapeShifter.prototype = {
 					inString = true;
 					currentString = { begin:i, end:-1, delimiter:currentChar, characterCount:Array(128).fill(0) };
 				}
+			} 
+			if (formerChar==36 && currentChar==123 && currentString) { // 36 $, 123 {
+				if (currentString.delimiter==96) { // 96 `
+					// #82 : inside a template literal, backticks do not terminate the string
+					++insideTemplateLiteral;
+					if (insideTemplateLiteral == 1) {
+						currentTemplateLiteral = { begin: i, end: -1 };
+					}
+				}
+			}
+			if (currentChar==125 && currentString && insideTemplateLiteral>0) { // 125 }
+				if (currentString.delimiter==96) { // 96 `
+					// #82 : inside a template literal, backticks do not terminate the string
+					--insideTemplateLiteral;
+					if (!insideTemplateLiteral) {
+						currentTemplateLiteral.end=i;
+						inputData.containedTemplateLiterals.push(currentTemplateLiteral);
+					}
+				}
 			}
 			escaped = (currentChar==92 && !escaped);
 		}
+		
+		if (inputData.containedTemplateLiterals.length) {
+			details += "\nTemplate literals present in the code :\n";
+		}
+		for (var i=0; i<inputData.containedTemplateLiterals.length; ++i) {
+			var currentTemplateLiteral = inputData.containedTemplateLiterals[i];
+			details += "("+currentTemplateLiteral.begin+"-"+currentTemplateLiteral.end+") ";
+			details += input.substr(currentString.begin-1, currentString.end-currentString.begin+2)+"\n";
+		}
+		
 		inputData.log+=details+"\n";
+		
 	},
 	
 	/**
@@ -1771,7 +1824,7 @@ ShapeShifter.prototype = {
 				rangeIn : [currentString.begin, currentString.end-currentString.begin+1],
 				rangeOut: [newInput.length, currentString.end-currentString.begin+1]
 			};
-			if (currentString.delimiter == newDelimiter) {
+			if (currentDelimiter == newDelimiter) {
 				// keep the delimiter for the current string 
 				// copy as is and keep the iso mapping
 				newInput += inputData.contents.substr(currentString.begin, currentString.end-currentString.begin+1);
